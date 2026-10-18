@@ -1,0 +1,25 @@
+alpha=8  H=0.1  base=etx  nodes=50  trials=15
+rules: gain >= 5.0% and paired CI above 0; delay inc <= 10.0%; hop inc <= 15.0%; route-change allowance 25% + 1/min
+
+fragile=0     speed=0     -> OLSR sufficient   gain=  -0.7%  dDelay= -1.4%  dHops= -2.2%  chg/min olsr=0.00 conf=2.10 conf_h=0.17
+fragile=0     speed=5     -> OLSR sufficient   gain=  -1.6%  dDelay=  0.2%  dHops= -0.9%  chg/min olsr=5.23 conf=5.54 conf_h=3.43
+fragile=0     speed=15    -> OLSR sufficient   gain=  -1.8%  dDelay= -0.0%  dHops= -1.0%  chg/min olsr=8.09 conf=8.03 conf_h=6.23
+fragile=0.1   speed=0     -> needs hysteresis  gain=   7.0%  dDelay=  3.3%  dHops= -1.9%  chg/min olsr=0.00 conf=2.54 conf_h=0.35
+fragile=0.1   speed=5     -> beneficial        gain=   8.6%  dDelay=  3.5%  dHops= -1.1%  chg/min olsr=5.43 conf=5.77 conf_h=3.52
+fragile=0.1   speed=15    -> beneficial        gain=   7.9%  dDelay=  3.8%  dHops= -1.3%  chg/min olsr=8.37 conf=8.22 conf_h=6.39
+fragile=0.25  speed=0     -> needs hysteresis  gain=  28.5%  dDelay=  9.4%  dHops= -2.1%  chg/min olsr=0.00 conf=3.24 conf_h=0.75
+fragile=0.25  speed=5     -> beneficial        gain=  20.3%  dDelay=  9.9%  dHops= -1.1%  chg/min olsr=5.02 conf=5.33 conf_h=3.43
+fragile=0.25  speed=15    -> beneficial        gain=  17.9%  dDelay=  9.7%  dHops= -1.4%  chg/min olsr=7.86 conf=7.70 conf_h=6.16
+fragile=0.5   speed=0     -> too costly        gain=  42.8%  dDelay= 12.8%  dHops= -3.8%  chg/min olsr=0.00 conf=3.80 conf_h=1.24
+fragile=0.5   speed=5     -> too costly        gain=  41.2%  dDelay= 15.7%  dHops= -2.2%  chg/min olsr=5.33 conf=5.98 conf_h=4.09
+fragile=0.5   speed=15    -> too costly        gain=  37.0%  dDelay= 16.8%  dHops= -3.0%  chg/min olsr=8.20 conf=7.97 conf_h=6.54
+
+Decision map (rows: fraction of unreliable nodes, columns: max node speed m/s)
+                             0                   5                  15
+         0     OLSR sufficient     OLSR sufficient     OLSR sufficient
+       0.1    needs hysteresis          beneficial          beneficial
+      0.25    needs hysteresis          beneficial          beneficial
+       0.5          too costly          too costly          too costly
+
+saved demo_outputs/boundary.csv
+saved demo_outputs/figs_boundary/decision_map.png  (numbers in cells = PDR gain over plain routing)
