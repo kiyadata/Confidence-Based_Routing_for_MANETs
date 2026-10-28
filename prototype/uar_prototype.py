@@ -16,7 +16,7 @@ What it does
         mult        : etx * (1 + alpha * (1 - c))        [UAR-Mesh, multiplicative]
         add         : etx + beta * (1 - c)               [UAR-Mesh, additive]
         threshold   : etx, but skip relays with c < c_min
-        bottleneck  : maximize the lowest relay confidence, then minimize etx
+        adaptive_alpha: additive penalty with alpha scaled by the low-confidence fraction
   4. Reports metrics, averaged over many random trials with 95% CI.
 
 Run:
@@ -40,7 +40,7 @@ import statistics
 
 LOW_CONF_THRESHOLD = 0.5
 INF = float("inf")
-MODES = ["hop", "etx", "mult", "add", "threshold", "bottleneck"]
+MODES = ["etx", "add", "mult", "threshold", "adaptive_alpha"]
 
 
 # ----------------------------------------------------------------------------
@@ -93,7 +93,7 @@ def edge_cost(mode, etx, c_v, is_dst, alpha, beta, c_min):
         return etx
     if mode == "mult":
         return etx * (1.0 + alpha * (1.0 - c_v))
-    if mode == "add":
+    if mode in ("add", "adaptive_alpha"):
         return etx + beta * (1.0 - c_v)
     if mode == "threshold":
         return etx if c_v >= c_min else INF
@@ -101,8 +101,6 @@ def edge_cost(mode, etx, c_v, is_dst, alpha, beta, c_min):
 
 
 def shortest_path(links, conf, src, dst, mode, alpha, beta, c_min):
-    if mode == "bottleneck":
-        return bottleneck_path(links, conf, src, dst)
     dist = {src: 0.0}
     prev = {}
     heap = [(0.0, src)]
@@ -124,27 +122,10 @@ def shortest_path(links, conf, src, dst, mode, alpha, beta, c_min):
     return rebuild(prev, src, dst) if dst in dist else None
 
 
-def bottleneck_path(links, conf, src, dst):
-    """Lexicographic Dijkstra: first maximise the worst relay confidence
-    (rounded to 0.1 so tiny differences do not dominate), then minimise ETX."""
-    start = (-1.0, 0.0)  # (negative bottleneck, etx); bottleneck 1.0 = no relays yet
-    best = {src: start}
-    prev = {}
-    heap = [(start, src)]
-    while heap:
-        key, u = heapq.heappop(heap)
-        if key > best.get(u, (INF, INF)):
-            continue
-        if u == dst:
-            break
-        for v, etx in links[u].items():
-            relay_c = 1.0 if v == dst else round(conf[v], 1)
-            nkey = (max(key[0], -relay_c), key[1] + etx)
-            if nkey < best.get(v, (INF, INF)):
-                best[v] = nkey
-                prev[v] = u
-                heapq.heappush(heap, (nkey, v))
-    return rebuild(prev, src, dst) if dst in best else None
+def adaptive_alpha(conf, alpha_lo, alpha_hi, frac_ref):
+    low_fraction = sum(c < LOW_CONF_THRESHOLD for c in conf) / len(conf)
+    scale = min(1.0, low_fraction / frac_ref)
+    return alpha_lo + (alpha_hi - alpha_lo) * scale
 
 
 def rebuild(prev, src, dst):
@@ -197,12 +178,19 @@ def run_trial(args, low_fraction, rng):
 
     out = {}
     for mode in MODES:
+        mode_beta = args.beta
+        if mode == "adaptive_alpha":
+            mode_beta = adaptive_alpha(
+                conf, args.alpha_lo, args.alpha_hi, args.frac_ref
+            )
         delivered = 0
         low_flows = 0
         useful_sum = 0.0
         etx_list, hop_list = [], []
         for s, d in flows:
-            p = shortest_path(links, conf, s, d, mode, args.alpha, args.beta, args.cmin)
+            p = shortest_path(
+                links, conf, s, d, mode, args.alpha, mode_beta, args.cmin
+            )
             if p is None:
                 continue  # mode (e.g. threshold) disconnected this flow
             m = path_metrics(p, conf, links)
@@ -223,7 +211,7 @@ def run_trial(args, low_fraction, rng):
 
 
 # ----------------------------------------------------------------------------
-# Sanity check: with all confidence = 1, mult/add/bottleneck must equal etx
+# Sanity check: with all confidence = 1, confidence-aware modes must equal etx
 # ----------------------------------------------------------------------------
 def sanity_check(args):
     rng = random.Random(123)
@@ -236,7 +224,7 @@ def sanity_check(args):
             continue
         base = shortest_path(links, conf, s, d, "etx", args.alpha, args.beta, args.cmin)
         base_cost = path_metrics(base, conf, links)["etx"]
-        for mode in ("mult", "add", "threshold", "bottleneck"):
+        for mode in ("mult", "add", "threshold", "adaptive_alpha"):
             p = shortest_path(links, conf, s, d, mode, args.alpha, args.beta, args.cmin)
             cost = path_metrics(p, conf, links)["etx"]
             assert abs(cost - base_cost) < 1e-9, (mode, s, d, cost, base_cost)
@@ -265,12 +253,20 @@ def main():
     ap.add_argument("--trials", type=int, default=30)
     ap.add_argument("--alpha", type=float, default=4.0, help="multiplicative penalty weight")
     ap.add_argument("--beta", type=float, default=5.0, help="additive penalty weight")
+    ap.add_argument("--alpha-lo", type=float, default=1.0,
+                    help="adaptive-alpha minimum additive penalty")
+    ap.add_argument("--alpha-hi", type=float, default=8.0,
+                    help="adaptive-alpha maximum additive penalty")
+    ap.add_argument("--frac-ref", type=float, default=0.25,
+                    help="low-confidence fraction at which adaptive alpha reaches alpha-hi")
     ap.add_argument("--cmin", type=float, default=0.5, help="threshold variant cutoff")
     ap.add_argument("--pattern", choices=["random", "clustered"], default="random")
     ap.add_argument("--fractions", type=float, nargs="+", default=[0.0, 0.1, 0.25, 0.5])
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--csv", type=str, default=None)
     args = ap.parse_args()
+    if args.frac_ref <= 0:
+        ap.error("--frac-ref must be greater than zero")
 
     sanity_check(args)
 
@@ -288,18 +284,70 @@ def main():
 
         print(f"=== low-confidence fraction = {frac:.2f}  (nodes={args.nodes}, "
               f"pattern={args.pattern}, trials={args.trials}) ===")
-        print(f"{'mode':<11}{'delivered':>11}{'low-relay%':>12}{'useful':>10}{'ETX':>9}{'hops':>7}")
+        print(f"{'mode':<15}{'delivered':>11}{'low-relay%':>12}{'useful':>10}{'ETX':>9}{'hops':>7}")
         for m in MODES:
             d, _ = mean_ci(collected[m]["delivered"])
             ls, ls_ci = mean_ci(collected[m]["low_share"])
             u, u_ci = mean_ci(collected[m]["useful"])
             e, _ = mean_ci(collected[m]["etx"])
             h, _ = mean_ci(collected[m]["hops"])
-            print(f"{m:<11}{d:>11.3f}{100*ls:>10.1f}%{u:>8.3f}+-{u_ci:.3f}{e:>7.2f}{h:>7.2f}")
+            print(f"{m:<15}{d:>11.3f}{100*ls:>10.1f}%{u:>8.3f}+-{u_ci:.3f}{e:>7.2f}{h:>7.2f}")
             rows.append({"fraction": frac, "mode": m, "delivered": d,
                          "low_relay_share": ls, "low_relay_ci": ls_ci,
                          "useful": u, "useful_ci": u_ci, "etx": e, "hops": h})
         print()
+
+    confidence_modes = {"add", "mult", "threshold", "adaptive_alpha"}
+    delivery_tolerance = 0.02
+    summaries = []
+    for frac in args.fractions:
+        scenario = [row for row in rows if row["fraction"] == frac]
+        baseline = next(
+            (row for row in scenario if row["mode"] == "etx"), None
+        )
+        candidates = [
+            row for row in scenario if row["mode"] in confidence_modes
+        ]
+        if baseline is None or not candidates:
+            continue
+
+        best = max(candidates, key=lambda row: row["useful"])
+        improvement = best["useful"] - baseline["useful"]
+        delivery_difference = best["delivered"] - baseline["delivered"]
+        if improvement > 0 and delivery_difference >= -delivery_tolerance:
+            conclusion = "Advantage"
+        elif improvement > 0:
+            conclusion = "Delivery trade-off"
+        else:
+            conclusion = "No improvement"
+        summaries.append((
+            frac, best["mode"], baseline["useful"], best["useful"],
+            improvement, baseline["delivered"], best["delivered"],
+            delivery_difference, best["etx"], best["low_relay_share"],
+            conclusion,
+        ))
+
+    print("========== FINAL ROUTING COMPARISON ==========")
+    print(
+        f"{'Low-conf':>9} {'Best strategy':<16} {'ETX useful':>11} "
+        f"{'Best useful':>12} {'Delta':>8} {'ETX delivery':>13} "
+        f"{'Best delivery':>14} {'Delta':>8} {'Path ETX':>9} "
+        f"{'Low-relay':>11} {'Conclusion':<19}"
+    )
+    if summaries:
+        for (frac, mode, base_useful, best_useful, improvement,
+             base_delivery, best_delivery, delivery_difference, best_etx,
+             low_share, conclusion) in summaries:
+            print(
+                f"{frac:>8.0%} {mode:<16} {base_useful:>11.3f} "
+                f"{best_useful:>12.3f} {improvement:>+8.3f} "
+                f"{base_delivery:>13.3f} {best_delivery:>14.3f} "
+                f"{delivery_difference:>+8.3f} {best_etx:>9.2f} "
+                f"{low_share:>10.1%} {conclusion:<19}"
+            )
+    else:
+        print("No comparable baseline and confidence-strategy results.")
+    print("ETX is a graph-routing baseline, not a full OLSR implementation.")
 
     if args.csv:
         with open(args.csv, "w", newline="") as f:

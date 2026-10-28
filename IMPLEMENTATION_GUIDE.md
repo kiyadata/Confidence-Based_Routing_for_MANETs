@@ -55,24 +55,25 @@ Requirements: Python 3.8+, nothing to install.
 What it does
   1. Scatters nodes in a square, links nodes within radio range, gives each link an ETX.
   2. Marks a fraction of nodes as low confidence (c between 0.05 and 0.40), the rest high (0.85 to 1.0).
-  3. Routes random flows under six cost functions: hop, etx, mult, add, threshold, bottleneck.
+  3. Routes random flows under five cost functions: etx, add, mult, threshold, adaptive_alpha.
   4. Reports, averaged over trials with 95% confidence intervals:
        delivered     fraction of flows that still found a route
        low-relay%    fraction of delivered flows that pass through a low-confidence relay
        useful        average of (product of relay confidences), counting undelivered flows as 0
        ETX, hops     path quality and length
 
-The sanity check at the top confirms the key design requirement: when every confidence is 1, mult/add/threshold/bottleneck produce exactly the ETX baseline.
+The sanity check at the top confirms the key design requirement: when every confidence is 1, add/mult/threshold/adaptive_alpha produce exactly the ETX baseline.
+
+The final comparison table reports the best confidence-aware strategy per low-confidence fraction against the ETX baseline. `adaptive_alpha` uses an additive confidence penalty whose weight grows from `--alpha-lo` to `--alpha-hi` as the observed low-confidence fraction approaches `--frac-ref`.
 
 What the first run showed (30 trials, 50 nodes, random pattern)
-  - At 25% low-confidence nodes, plain ETX sends 58.5% of flows through at least one low-confidence relay. mult cuts that to 25.3%, add to 26.0%, bottleneck to 8.8%.
-  - Useful delivery at 25%: etx 0.423, mult 0.646, add 0.649, bottleneck 0.746.
-  - The price: path ETX rises from 9.92 (etx) to 10.81 (mult), and to 15.19 for bottleneck.
+  - At 25% low-confidence nodes, plain ETX sends 58.5% of flows through at least one low-confidence relay. mult cuts that to 25.3%, and add to 26.0%.
+  - Useful delivery at 25%: etx 0.423, mult 0.646, add 0.649.
+  - The price: path ETX rises from 9.92 (etx) to 10.81 (mult).
   - threshold removes low relays entirely but disconnects flows: delivery drops to 0.912 at 25% and 0.705 at 50%.
 
 How to read this
   - mult and add are the moderate options: big drop in bad relays, small extra cost.
-  - bottleneck avoids bad nodes hardest but pays the most extra ETX.
   - threshold shows the danger of a hard cutoff, and is a nice argument for a soft penalty in your paper.
   - Treat these as preliminary results from a toy model. The paper's numbers come from ns-3.
 
@@ -283,10 +284,9 @@ Debug scenario (build this first, before the big experiments)
 What to compare (series in every plot)
   1. olsr-hop                stock OLSR, hop count
   2. olsr-etx                if you built Option B
-  3. uar-mult                confidence-aware, multiplicative
-  4. uar-add                 confidence-aware, additive
+  3. uar-mult                 confidence-aware, multiplicative
+  4. uar-add                  confidence-aware, additive
   5. uar-threshold           hard cutoff, as a baseline to beat
-  (optional) uar-bottleneck
 
 Parameter grid
   nNodes             20, 50, 100
